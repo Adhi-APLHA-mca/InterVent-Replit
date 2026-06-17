@@ -15,7 +15,7 @@ import { auth, db } from "@/lib/firebase";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 
-const FASTAPI_URL = import.meta.env.VITE_FASTAPI_URL || "http://localhost:8000";
+const FASTAPI_URL = import.meta.env.VITE_FASTAPI_URL || "";
 
 interface Job {
   job_id: string;

@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-const FASTAPI_URL = import.meta.env.VITE_FASTAPI_URL || "http://localhost:8000";
+const FASTAPI_URL = import.meta.env.VITE_FASTAPI_URL || "";
 
 interface Question {
   question: string;

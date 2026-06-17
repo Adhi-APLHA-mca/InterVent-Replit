@@ -14,7 +14,7 @@ import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { auth } from "@/lib/firebase";
 
-const FASTAPI_URL = import.meta.env.VITE_FASTAPI_URL || "http://localhost:8000";
+const FASTAPI_URL = import.meta.env.VITE_FASTAPI_URL || "";
 
 const schedulerSchema = z.object({
   jobTitle: z.string().min(2, { message: "Job title is required." }),

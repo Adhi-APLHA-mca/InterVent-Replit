@@ -13,7 +13,7 @@ import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 
-const FASTAPI_URL = import.meta.env.VITE_FASTAPI_URL || "http://localhost:8000";
+const FASTAPI_URL = import.meta.env.VITE_FASTAPI_URL || "";
 const PISTON_URL = "https://emkc.org/api/v2/piston/execute";
 const EXAM_MINUTES = 90;
 const MAX_VIOLATIONS = 3;
