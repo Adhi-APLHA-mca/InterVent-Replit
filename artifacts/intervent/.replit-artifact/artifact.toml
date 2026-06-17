@@ -12,10 +12,10 @@ version = "1.0.0"
 [[services]]
 name = "web"
 paths = [ "/" ]
-localPort = 23709
+localPort = 3000
 
 [services.development]
-run = "pnpm --filter @workspace/intervent run dev"
+run = "bash -c 'cd /home/runner/workspace/artifacts/intervent && node node_modules/vite/bin/vite.js --host 0.0.0.0 --port $PORT'"
 
 [services.production]
 build = [ "pnpm", "--filter", "@workspace/intervent", "run", "build" ]
@@ -27,5 +27,5 @@ from = "/*"
 to = "/index.html"
 
 [services.env]
-PORT = "23709"
+PORT = "3000"
 BASE_PATH = "/"

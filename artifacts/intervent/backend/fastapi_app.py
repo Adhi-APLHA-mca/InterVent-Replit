@@ -34,6 +34,7 @@ from resume_agent.email_agent import run_email_agent
 from resume_agent.assessment_agent import generate_assessment_questions, evaluate_assessment
 from resume_agent.aptitude_agent import generate_aptitude_questions, evaluate_aptitude
 from resume_agent.dsa_agent import generate_dsa_problems, strip_hidden_test_cases, evaluate_dsa_submission
+from resume_agent.meet_agent import generate_meet_questions, evaluate_meet_interview
 
 load_dotenv()
 
@@ -765,6 +766,225 @@ async def submit_dsa_endpoint(req: DSASubmitRequest):
     })
 
     return {"success": True, "evaluation": evaluation}
+
+
+# ─── Agent 7: Meet Agent (AI Voice Interview) ──────────────────────────────────
+
+class MeetGenerateRequest(BaseModel):
+    job_id: str
+    candidate_id: str
+    student_token: str
+
+
+class MeetSubmitRequest(BaseModel):
+    job_id: str
+    candidate_id: str
+    student_token: str
+    answers: List[str]
+    time_taken_seconds: int = 0
+
+
+class MeetSelectionEmailRequest(BaseModel):
+    job_id: str
+    candidate_id: str
+    hr_token: str
+
+
+@app.post("/api/meet/generate")
+async def generate_meet_endpoint(req: MeetGenerateRequest):
+    """
+    Agent 7 — Generate 10 voice interview questions (5 HR + 5 Technical).
+    Questions are saved to Firestore. Client uses Web Speech API to ask/record.
+    """
+    verify_student_token(req.student_token)
+
+    db_client = get_firestore_client()
+    job_ref = db_client.collection("jobs").document(req.job_id)
+    job_doc = job_ref.get()
+    if not job_doc.exists:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    job_data = job_doc.to_dict()
+
+    cand_ref = job_ref.collection("candidates").document(req.candidate_id)
+    cand_doc = cand_ref.get()
+    if not cand_doc.exists:
+        raise HTTPException(status_code=404, detail="Candidate not found.")
+    cand_data = cand_doc.to_dict()
+
+    existing = cand_data.get("meet_interview", {})
+    if existing.get("status") == "completed":
+        return {
+            "success": True,
+            "questions": existing.get("questions", []),
+            "already_completed": True,
+        }
+    if existing.get("status") == "in_progress" and existing.get("questions"):
+        return {
+            "success": True,
+            "questions": existing["questions"],
+            "already_completed": False,
+        }
+
+    from datetime import datetime, timezone
+    job_role = cand_data.get("job_role", job_data.get("job_title", "Software Engineer"))
+    skills = cand_data.get("skills", [])
+    experience = cand_data.get("experience", 0.0)
+    job_description = job_data.get("job_description", "")
+
+    questions = generate_meet_questions(
+        job_role=job_role,
+        job_description=job_description,
+        skills=skills,
+        experience=experience,
+    )
+
+    cand_ref.update({
+        "meet_interview": {
+            "status": "in_progress",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "questions": questions,
+            "answers": [],
+            "evaluation": None,
+            "time_taken_seconds": 0,
+        }
+    })
+
+    return {"success": True, "questions": questions, "already_completed": False}
+
+
+@app.post("/api/meet/submit")
+async def submit_meet_endpoint(req: MeetSubmitRequest):
+    """
+    Agent 7 — Submit voice answers, evaluate with LLM, save report to Firestore.
+    """
+    verify_student_token(req.student_token)
+
+    db_client = get_firestore_client()
+    job_ref = db_client.collection("jobs").document(req.job_id)
+    job_doc = job_ref.get()
+    if not job_doc.exists:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    job_data = job_doc.to_dict()
+
+    cand_ref = job_ref.collection("candidates").document(req.candidate_id)
+    cand_doc = cand_ref.get()
+    if not cand_doc.exists:
+        raise HTTPException(status_code=404, detail="Candidate not found.")
+    cand_data = cand_doc.to_dict()
+
+    meet_data = cand_data.get("meet_interview", {})
+    questions = meet_data.get("questions", [])
+    if not questions:
+        raise HTTPException(status_code=400, detail="No questions found. Start the interview first.")
+
+    padded_answers = list(req.answers) + [""] * max(0, len(questions) - len(req.answers))
+    padded_answers = padded_answers[:len(questions)]
+
+    job_role = cand_data.get("job_role", job_data.get("job_title", "Software Engineer"))
+    evaluation = evaluate_meet_interview(
+        job_role=job_role,
+        questions=questions,
+        answers=padded_answers,
+    )
+
+    from datetime import datetime, timezone
+    cand_ref.update({
+        "meet_interview": {
+            **meet_data,
+            "status": "completed",
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+            "answers": padded_answers,
+            "evaluation": evaluation,
+            "time_taken_seconds": req.time_taken_seconds,
+        }
+    })
+
+    return {"success": True, "evaluation": evaluation}
+
+
+@app.post("/api/meet/send-selection-email")
+async def send_meet_selection_email(req: MeetSelectionEmailRequest):
+    """
+    HR triggers this to send a final selection/offer email to a candidate
+    who passed the AI voice interview. Uses existing SMTP email infrastructure.
+    """
+    verify_hr_token(req.hr_token)
+
+    import smtplib
+    from email.mime.text import MIMEText
+    from email.mime.multipart import MIMEMultipart
+
+    db_client = get_firestore_client()
+    job_ref = db_client.collection("jobs").document(req.job_id)
+    job_doc = job_ref.get()
+    if not job_doc.exists:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    job_data = job_doc.to_dict()
+
+    cand_ref = job_ref.collection("candidates").document(req.candidate_id)
+    cand_doc = cand_ref.get()
+    if not cand_doc.exists:
+        raise HTTPException(status_code=404, detail="Candidate not found.")
+    cand_data = cand_doc.to_dict()
+
+    candidate_email = (cand_data.get("email") or "").strip()
+    candidate_name = cand_data.get("name", "Candidate")
+    job_title = job_data.get("job_title", "the position")
+    company_name = job_data.get("hr_name", "Our Company")
+
+    if not candidate_email:
+        raise HTTPException(status_code=400, detail="Candidate has no email address.")
+
+    smtp_user = os.getenv("SMTP_USER", "")
+    smtp_password = os.getenv("SMTP_PASSWORD", "")
+    if not smtp_user or not smtp_password:
+        raise HTTPException(
+            status_code=500,
+            detail="SMTP credentials not configured. Please set SMTP_USER and SMTP_PASSWORD in .env"
+        )
+
+    subject = f"You're Selected! — {job_title} at {company_name}"
+    body = f"""Dear {candidate_name},
+
+We are thrilled to inform you that after completing all stages of our interview process — including your AI-powered voice interview — you have been SELECTED for the position of {job_title} at {company_name}!
+
+Your performance throughout the entire process was impressive. Our team is excited about the possibility of you joining us.
+
+Our HR team will be in touch very shortly with details regarding:
+  • Offer letter and compensation package
+  • Joining date and onboarding process
+  • Any documentation required
+
+Please feel free to reply to this email if you have any questions or need any clarification.
+
+Congratulations once again! We look forward to welcoming you to the team.
+
+Warm regards,
+{company_name} Recruitment Team
+
+---
+This is an official selection notification from the InterVent hiring platform.
+"""
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = smtp_user
+    msg["To"] = candidate_email
+    msg.attach(MIMEText(body, "plain", "utf-8"))
+
+    try:
+        smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
+        smtp_port = int(os.getenv("SMTP_PORT", "587"))
+        with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as server:
+            server.ehlo()
+            server.starttls()
+            server.login(smtp_user, smtp_password)
+            server.sendmail(smtp_user, [candidate_email], msg.as_string())
+
+        cand_ref.update({"meet_selection_email_sent": True})
+        return {"success": True, "message": f"Selection email sent to {candidate_email}"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to send email: {e}")
 
 
 if __name__ == "__main__":

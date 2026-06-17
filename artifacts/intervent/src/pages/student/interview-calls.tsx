@@ -5,7 +5,7 @@ import { onAuthStateChanged } from "firebase/auth";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   PhoneIncoming, CheckCircle2, XCircle, Clock, CalendarCheck,
-  Building2, Briefcase, X, Send, Loader2, Code2, Trophy, AlertCircle, Brain, BarChart3
+  Building2, Briefcase, X, Send, Loader2, Code2, Trophy, AlertCircle, Brain, BarChart3, Video, Mic
 } from "lucide-react";
 import { db, auth } from "@/lib/firebase";
 import { Button } from "@/components/ui/button";
@@ -56,6 +56,20 @@ interface DSARecord {
   violations?: number;
 }
 
+interface MeetRecord {
+  status: "in_progress" | "completed";
+  evaluation?: {
+    overall_score: number;
+    hr_score: number;
+    technical_score: number;
+    recommendation: "selected" | "not_selected";
+    passed: boolean;
+    summary: string;
+  };
+  started_at?: string;
+  completed_at?: string;
+}
+
 interface CandidateRecord {
   candidate_id: string;
   job_id: string;
@@ -71,6 +85,7 @@ interface CandidateRecord {
   assessment?: AssessmentRecord;
   aptitude?: AptitudeRecord;
   dsa?: DSARecord;
+  meet_interview?: MeetRecord;
   _ref: ReturnType<typeof import("firebase/firestore").doc>;
 }
 
@@ -243,6 +258,11 @@ function CallCard({
   const dsaInProgress = dsa?.status === "in_progress";
   const dsaPassed = dsaDone && dsa?.evaluation?.passed;
   const dsaFailed = dsaDone && dsa?.evaluation && !dsa.evaluation.passed;
+  const meet = record.meet_interview;
+  const meetDone = meet?.status === "completed";
+  const meetInProgress = meet?.status === "in_progress";
+  const meetPassed = meetDone && meet?.evaluation?.passed;
+  const meetFailed = meetDone && meet?.evaluation && !meet.evaluation.passed;
 
   return (
     <>
@@ -533,6 +553,59 @@ function CallCard({
                                 View
                               </Button>
                             </div>
+                          )}
+
+                          {/* ── Stage 4 AI Voice Interview (only after Stage 3 passed) ── */}
+                          {dsaPassed && (
+                            <>
+                              {!meet && (
+                                <Button
+                                  onClick={() => setLocation(`/student/meet?job_id=${record.job_id}&candidate_id=${record.candidate_id}`)}
+                                  className="w-full bg-gradient-to-r from-violet-600 to-purple-600 text-white hover:opacity-90 gap-2"
+                                  size="sm"
+                                >
+                                  <Video size={15} />
+                                  Take Stage 4 AI Voice Interview
+                                </Button>
+                              )}
+                              {meetInProgress && (
+                                <Button
+                                  onClick={() => setLocation(`/student/meet?job_id=${record.job_id}&candidate_id=${record.candidate_id}`)}
+                                  className="w-full gap-2 border-amber-500/40 text-amber-600 hover:bg-amber-500/10"
+                                  variant="outline"
+                                  size="sm"
+                                >
+                                  <Loader2 size={14} className="animate-spin" />
+                                  Resume AI Interview (In Progress)
+                                </Button>
+                              )}
+                              {meetPassed && (
+                                <div className="rounded-xl border border-green-500/30 bg-green-500/5 p-3 flex items-center justify-between gap-2">
+                                  <div className="flex items-center gap-2">
+                                    <Trophy size={14} className="text-green-500 shrink-0" />
+                                    <div>
+                                      <p className="text-xs font-semibold text-green-700 dark:text-green-400">
+                                        Stage 4 Passed — {meet?.evaluation?.overall_score}% score
+                                      </p>
+                                      <p className="text-[11px] text-green-600/70 dark:text-green-500/70">
+                                        Recommended for Selection ✓
+                                      </p>
+                                    </div>
+                                  </div>
+                                </div>
+                              )}
+                              {meetFailed && (
+                                <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-3 flex items-center gap-2">
+                                  <AlertCircle size={14} className="text-red-500 shrink-0" />
+                                  <div>
+                                    <p className="text-xs font-medium text-red-600 dark:text-red-400">
+                                      Stage 4 Not Passed — {meet?.evaluation?.overall_score}% score
+                                    </p>
+                                    <p className="text-[11px] text-red-500/70">Below threshold for this round</p>
+                                  </div>
+                                </div>
+                              )}
+                            </>
                           )}
                         </>
                       )}

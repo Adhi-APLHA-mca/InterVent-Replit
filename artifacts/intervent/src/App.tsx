@@ -18,6 +18,7 @@ import AptitudePage from "@/pages/student/aptitude";
 import AptitudeResults from "@/pages/student/aptitude-results";
 import DSAPage from "@/pages/student/dsa";
 import DSAResults from "@/pages/student/dsa-results";
+import MeetInterviewPage from "@/pages/student/meet-interview";
 
 const queryClient = new QueryClient();
 
@@ -79,6 +80,11 @@ function Router() {
       </Route>
       <Route path="/student/dsa">
         <DSAPage />
+      </Route>
+
+      {/* Stage 4 — AI Voice Interview (Meet Agent) */}
+      <Route path="/student/meet">
+        <MeetInterviewPage />
       </Route>
 
       <Route component={NotFound} />

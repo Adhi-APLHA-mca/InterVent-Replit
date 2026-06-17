@@ -7,7 +7,7 @@ import { onAuthStateChanged } from "firebase/auth";
 import {
   ArrowLeft, Briefcase, Users, CheckCircle2, XCircle,
   Clock, Loader2, Mail, ChevronRight, CalendarPlus,
-  Sparkles, Send, RefreshCw, Code2, Trophy, AlertCircle, Brain, BarChart3,
+  Sparkles, Send, RefreshCw, Code2, Trophy, AlertCircle, Brain, BarChart3, Video, Mic,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -85,6 +85,22 @@ interface Candidate {
     time_taken_seconds?: number;
     completed_at?: string;
   };
+  meet_interview?: {
+    status: "in_progress" | "completed";
+    evaluation?: {
+      overall_score: number;
+      hr_score: number;
+      technical_score: number;
+      recommendation: "selected" | "not_selected";
+      passed: boolean;
+      summary: string;
+      strengths: string[];
+      improvements: string[];
+    };
+    completed_at?: string;
+    time_taken_seconds?: number;
+  };
+  meet_selection_email_sent?: boolean;
 }
 
 function formatDate(iso: string) {
@@ -277,6 +293,26 @@ function CandidateCard({ candidate }: { candidate: Candidate }) {
               <BarChart3 size={9} /> S3 Failed {candidate.dsa.evaluation.passed_problems}/3
             </Badge>
           )}
+          {candidate.meet_interview?.status === "in_progress" && (
+            <Badge className="bg-violet-500/15 text-violet-600 border-violet-500/30 border text-[10px] px-1.5 py-0 h-4 gap-0.5">
+              <Mic size={9} /> Interview In Progress
+            </Badge>
+          )}
+          {candidate.meet_interview?.status === "completed" && candidate.meet_interview.evaluation?.passed && (
+            <Badge className="bg-emerald-500/15 text-emerald-600 border-emerald-500/30 border text-[10px] px-1.5 py-0 h-4 gap-0.5">
+              <Video size={9} /> S4 Selected {candidate.meet_interview.evaluation.overall_score}%
+            </Badge>
+          )}
+          {candidate.meet_interview?.status === "completed" && candidate.meet_interview.evaluation && !candidate.meet_interview.evaluation.passed && (
+            <Badge className="bg-red-500/15 text-red-500 border-red-500/30 border text-[10px] px-1.5 py-0 h-4 gap-0.5">
+              <Video size={9} /> S4 Not Selected {candidate.meet_interview.evaluation.overall_score}%
+            </Badge>
+          )}
+          {candidate.meet_selection_email_sent && (
+            <Badge className="bg-green-500/15 text-green-600 border-green-500/30 border text-[10px] px-1.5 py-0 h-4 gap-0.5">
+              <Mail size={9} /> Offer Sent
+            </Badge>
+          )}
         </div>
         <p className="text-xs text-muted-foreground mt-0.5">{candidate.email}</p>
         {candidate.screening_reason && (
@@ -296,6 +332,181 @@ function CandidateCard({ candidate }: { candidate: Candidate }) {
 }
 
 // ── Job Detail View ───────────────────────────────────────────────────────────
+function MeetReportSection({ job, candidates }: { job: Job; candidates: Candidate[] }) {
+  const { toast } = useToast();
+  const [sendingEmail, setSendingEmail] = useState<string | null>(null);
+
+  const meetCandidates = candidates.filter((c) => c.meet_interview?.status === "completed");
+  const selected = meetCandidates.filter((c) => c.meet_interview?.evaluation?.passed);
+  const notSelected = meetCandidates.filter((c) => c.meet_interview?.evaluation && !c.meet_interview.evaluation.passed);
+  const inProgress = candidates.filter((c) => c.meet_interview?.status === "in_progress");
+
+  const handleSendSelectionEmail = async (candidate: Candidate) => {
+    const user = auth.currentUser;
+    if (!user) return;
+    setSendingEmail(candidate.candidate_id);
+    try {
+      const idToken = await user.getIdToken();
+      const res = await fetch(`${FASTAPI_URL}/api/meet/send-selection-email`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          job_id: job.job_id,
+          candidate_id: candidate.candidate_id,
+          hr_token: idToken,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Failed to send email");
+      toast({
+        title: "Selection email sent! 🎉",
+        description: `Offer notification sent to ${candidate.email}`,
+      });
+    } catch (err: unknown) {
+      toast({
+        title: "Failed to send email",
+        description: err instanceof Error ? err.message : "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setSendingEmail(null);
+    }
+  };
+
+  if (meetCandidates.length === 0 && inProgress.length === 0) {
+    return (
+      <div className="rounded-xl border border-dashed border-border bg-muted/30 p-5 text-center">
+        <Video size={20} className="mx-auto text-muted-foreground mb-2" />
+        <p className="text-sm text-muted-foreground">
+          No candidates have completed the AI voice interview yet. Candidates unlock this after passing DSA (Stage 3).
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Summary */}
+      <div className="grid grid-cols-3 gap-3">
+        {[
+          { label: "Completed", value: meetCandidates.length, color: "text-foreground" },
+          { label: "Selected", value: selected.length, color: "text-green-600" },
+          { label: "Not Selected", value: notSelected.length, color: "text-red-500" },
+        ].map((s) => (
+          <div key={s.label} className="bg-muted/40 rounded-xl p-3 text-center">
+            <p className={cn("text-xl font-bold", s.color)}>{s.value}</p>
+            <p className="text-xs text-muted-foreground">{s.label}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* In-progress */}
+      {inProgress.length > 0 && (
+        <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-3 flex items-center gap-2">
+          <Loader2 size={14} className="text-amber-500 animate-spin shrink-0" />
+          <p className="text-xs text-amber-600 dark:text-amber-400">
+            {inProgress.length} candidate(s) currently taking the AI voice interview…
+          </p>
+        </div>
+      )}
+
+      {/* Selected — with Send Email button */}
+      {selected.length > 0 && (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <Trophy size={14} className="text-green-500" />
+            <p className="text-xs font-semibold text-green-700 dark:text-green-400">
+              Selected Candidates ({selected.length})
+            </p>
+          </div>
+          {selected.map((c) => (
+            <div key={c.candidate_id} className="rounded-xl border border-green-500/20 bg-green-500/5 p-4 space-y-2">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-2 flex-1 min-w-0">
+                  <div className="w-8 h-8 rounded-full bg-green-500/20 flex items-center justify-center text-xs font-bold text-green-600 shrink-0">
+                    {c.name?.charAt(0)?.toUpperCase() || "?"}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="font-medium text-sm truncate">{c.name}</p>
+                    <p className="text-xs text-muted-foreground truncate">{c.email}</p>
+                  </div>
+                </div>
+                <div className="text-right shrink-0">
+                  <p className="text-lg font-bold text-green-600">{c.meet_interview?.evaluation?.overall_score}%</p>
+                  <p className="text-[11px] text-muted-foreground">Overall Score</p>
+                </div>
+              </div>
+
+              {/* Score breakdown */}
+              <div className="grid grid-cols-2 gap-2">
+                <div className="bg-card rounded-lg p-2 text-center">
+                  <p className="text-sm font-bold">{c.meet_interview?.evaluation?.hr_score}%</p>
+                  <p className="text-[10px] text-muted-foreground">HR Score</p>
+                </div>
+                <div className="bg-card rounded-lg p-2 text-center">
+                  <p className="text-sm font-bold">{c.meet_interview?.evaluation?.technical_score}%</p>
+                  <p className="text-[10px] text-muted-foreground">Technical Score</p>
+                </div>
+              </div>
+
+              {c.meet_interview?.evaluation?.summary && (
+                <p className="text-xs text-muted-foreground italic">"{c.meet_interview.evaluation.summary}"</p>
+              )}
+
+              {/* Send Selection Email */}
+              {c.meet_selection_email_sent ? (
+                <div className="flex items-center gap-2 text-xs text-green-600 dark:text-green-400">
+                  <CheckCircle2 size={13} className="shrink-0" />
+                  Selection email already sent to candidate.
+                </div>
+              ) : (
+                <Button
+                  size="sm"
+                  onClick={() => handleSendSelectionEmail(c)}
+                  disabled={sendingEmail === c.candidate_id}
+                  className="w-full bg-gradient-to-r from-green-600 to-emerald-600 text-white hover:opacity-90 gap-2"
+                >
+                  {sendingEmail === c.candidate_id ? (
+                    <><Loader2 size={13} className="animate-spin" /> Sending…</>
+                  ) : (
+                    <><Mail size={13} /> Send Selection Email</>
+                  )}
+                </Button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Not Selected */}
+      {notSelected.length > 0 && (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <XCircle size={14} className="text-red-500" />
+            <p className="text-xs font-semibold text-red-600 dark:text-red-400">
+              Not Selected ({notSelected.length})
+            </p>
+          </div>
+          {notSelected.map((c) => (
+            <div key={c.candidate_id} className="flex items-center gap-3 rounded-xl border border-red-500/15 bg-red-500/5 p-3">
+              <div className="w-7 h-7 rounded-full bg-red-500/20 flex items-center justify-center text-xs font-bold text-red-500 shrink-0">
+                {c.name?.charAt(0)?.toUpperCase() || "?"}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium truncate">{c.name}</p>
+                <p className="text-xs text-muted-foreground">{c.email}</p>
+              </div>
+              <span className="text-sm font-bold text-red-500 shrink-0">
+                {c.meet_interview?.evaluation?.overall_score}%
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function JobDetailView({ job, onBack }: { job: Job; onBack: () => void }) {
   const { toast } = useToast();
   const [candidates, setCandidates] = useState<Candidate[]>([]);
@@ -587,6 +798,36 @@ function JobDetailView({ job, onBack }: { job: Job; onBack: () => void }) {
               </p>
             </div>
           )}
+        </div>
+      </div>
+
+      {/* ── Stage 4: Meet Agent (AI Voice Interview) ─────────────────────── */}
+      <div className={cn(
+        "bg-card border border-card-border rounded-2xl shadow-sm overflow-hidden transition-opacity duration-300",
+        !isScreeningDone && "opacity-40 pointer-events-none"
+      )}>
+        <div className="px-6 py-4 border-b border-card-border flex items-center gap-3">
+          <div className="w-7 h-7 rounded-full bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center text-white text-xs font-bold shrink-0">
+            4
+          </div>
+          <div>
+            <p className="font-semibold">Meet Agent — AI Voice Interview</p>
+            <p className="text-xs text-muted-foreground">
+              Candidates who pass DSA are invited for a 10-question voice interview (5 HR + 5 Technical).
+              AI evaluates answers and recommends final selection.
+            </p>
+          </div>
+          <div className="ml-auto">
+            {candidates.filter((c) => c.meet_interview?.status === "completed" && c.meet_interview.evaluation?.passed).length > 0 && (
+              <span className="inline-flex items-center gap-1.5 text-xs text-green-600 font-medium bg-green-500/10 border border-green-500/20 px-2 py-1 rounded-lg">
+                <Trophy size={12} />
+                {candidates.filter((c) => c.meet_interview?.evaluation?.passed).length} selected
+              </span>
+            )}
+          </div>
+        </div>
+        <div className="p-6">
+          <MeetReportSection job={job} candidates={candidates} />
         </div>
       </div>
     </motion.div>
