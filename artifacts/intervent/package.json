@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "concurrently \"npm run frontend\" \"npm run fastapi\"",
-    "frontend": "vite --host 0.0.0.0 --port 3000",
+    "dev": "vite --host 0.0.0.0 --port 5000",
+    "frontend": "vite --host 0.0.0.0 --port 5000",
     "fastapi": "cd backend && uvicorn fastapi_app:app --host 0.0.0.0 --port 8000 --reload",
     "build": "vite build",
     "preview": "vite preview"
@@ -73,7 +73,6 @@
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^5.0.4",
-    "concurrently": "^9.0.0",
     "tailwindcss": "^4.1.14",
     "typescript": "^5.9.3",
     "vite": "^7.3.2"

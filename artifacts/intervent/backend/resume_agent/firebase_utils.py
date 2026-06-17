@@ -13,12 +13,17 @@ def get_or_init_firebase():
     try:
         app = firebase_admin.get_app(app_name)
     except ValueError:
-        service_account_path = os.getenv(
-            "FIREBASE_SERVICE_ACCOUNT",
-            "serviceAccountKey.json"
-        )
-
-        cred = credentials.Certificate(service_account_path)
+        import json
+        sa_json = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON")
+        if sa_json:
+            sa_dict = json.loads(sa_json)
+            cred = credentials.Certificate(sa_dict)
+        else:
+            service_account_path = os.getenv(
+                "FIREBASE_SERVICE_ACCOUNT",
+                "serviceAccountKey.json"
+            )
+            cred = credentials.Certificate(service_account_path)
 
         app = firebase_admin.initialize_app(
             cred,
