@@ -17,23 +17,25 @@ def get_or_init_firebase():
         pass
 
     import json
+    cred = None
     sa_json = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON", "").strip()
     if sa_json:
         try:
             sa_dict = json.loads(sa_json)
             cred = credentials.Certificate(sa_dict)
         except json.JSONDecodeError as e:
-            raise RuntimeError(
-                f"FIREBASE_SERVICE_ACCOUNT_JSON is not valid JSON: {e}"
-            )
-    else:
+            print(f"[InterVent] FIREBASE_SERVICE_ACCOUNT_JSON is not valid JSON ({e}) — falling back to serviceAccountKey.json")
+
+    if cred is None:
+        backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         service_account_path = os.getenv(
             "FIREBASE_SERVICE_ACCOUNT",
-            "serviceAccountKey.json"
+            os.path.join(backend_dir, "serviceAccountKey.json")
         )
         if not os.path.exists(service_account_path):
             raise RuntimeError(
-                f"Firebase credentials not found. Set FIREBASE_SERVICE_ACCOUNT_JSON secret."
+                "Firebase credentials not found. Place serviceAccountKey.json in the backend directory "
+                "or set the FIREBASE_SERVICE_ACCOUNT_JSON environment secret."
             )
         cred = credentials.Certificate(service_account_path)
 
