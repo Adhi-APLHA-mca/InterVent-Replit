@@ -61,16 +61,16 @@ def init_firebase_default():
         pass
 
     import json
+    cred = None
     sa_json = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON", "").strip()
     if sa_json:
         try:
             sa_dict = json.loads(sa_json)
             cred = credentials.Certificate(sa_dict)
-        except json.JSONDecodeError as e:
-            print(f"[InterVent] WARNING: FIREBASE_SERVICE_ACCOUNT_JSON is not valid JSON: {e}")
-            print("[InterVent] Firebase auth will be unavailable until a valid credential is provided.")
-            return
-    else:
+        except json.JSONDecodeError:
+            print("[InterVent] FIREBASE_SERVICE_ACCOUNT_JSON is not valid JSON — falling back to serviceAccountKey.json")
+
+    if cred is None:
         service_account_path = os.getenv(
             "FIREBASE_SERVICE_ACCOUNT", "serviceAccountKey.json"
         )
