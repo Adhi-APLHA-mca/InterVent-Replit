@@ -100,6 +100,8 @@ export default function MeetInterviewPage() {
   const [cameraReady, setCameraReady] = useState(false);
   const [repeatFired, setRepeatFired] = useState(false);
   const [loadingNext, setLoadingNext] = useState(false);
+  const [showEndDialog, setShowEndDialog] = useState(false);
+  const [micBlocked, setMicBlocked] = useState(false);
 
   const tokenRef = useRef<string>("");
   const synthRef = useRef<SpeechSynthesis | null>(null);
@@ -121,11 +123,11 @@ export default function MeetInterviewPage() {
   useEffect(() => {
     synthRef.current = window.speechSynthesis;
     navigator.mediaDevices.getUserMedia({ video: true, audio: false })
-      .then(stream => {
-        streamRef.current = stream;
-        setCameraReady(true);
-      })
+      .then(stream => { streamRef.current = stream; setCameraReady(true); })
       .catch(() => setCameraOn(false));
+    navigator.mediaDevices.getUserMedia({ audio: true })
+      .then(s => { s.getTracks().forEach(t => t.stop()); setMicBlocked(false); })
+      .catch(() => setMicBlocked(true));
     return () => {
       streamRef.current?.getTracks().forEach(t => t.stop());
       synthRef.current?.cancel();
@@ -252,12 +254,23 @@ export default function MeetInterviewPage() {
       else { setIsListening(false); setInterimAnswer(""); }
     };
     rec.onerror = (e) => {
+      if (e.error === "not-allowed" || e.error === "service-not-allowed") {
+        setMicBlocked(true);
+        listeningRef.current = false;
+        setIsListening(false);
+        toast({ title: "Microphone blocked", description: "Please allow microphone access in your browser then click the mic button.", variant: "destructive" });
+        return;
+      }
       if (e.error !== "aborted" && listeningRef.current) setTimeout(() => { if (listeningRef.current) startListening(); }, 500);
     };
 
     recognitionRef.current = rec;
     listeningRef.current = true;
-    rec.start();
+    try { rec.start(); } catch (err) {
+      console.error("SpeechRecognition start error:", err);
+      listeningRef.current = false;
+      setIsListening(false);
+    }
     setIsListening(true); setAiStatus("listening");
   }, [micOn, speak, toast]);
 
@@ -388,10 +401,69 @@ export default function MeetInterviewPage() {
     }
   }, [isSpeaking, loadingNext, history, currentIndex, speak, stopListening, addToTranscript, autoListenFn, fetchNextQuestion, job_id, candidate_id, interviewStart, toast]);
 
+  const handleEndAndEvaluate = useCallback(async () => {
+    setShowEndDialog(false);
+    stopListening();
+    synthRef.current?.cancel();
+    if (timerRef.current) clearInterval(timerRef.current);
+
+    const captured = (currentAnswerRef.current + " " + interimAnswerRef.current).trim();
+    let finalHistory = [...history];
+    if (captured && currentQuestionRef.current) {
+      finalHistory = [...finalHistory, {
+        question: currentQuestionRef.current.question,
+        type: currentQuestionRef.current.type,
+        answer: captured,
+      }];
+    }
+
+    if (finalHistory.length === 0) {
+      streamRef.current?.getTracks().forEach(t => t.stop());
+      setLocation("/student/calls");
+      return;
+    }
+
+    setPhase("submitting");
+    try {
+      const res = await fetch(`${FASTAPI_URL}/api/meet/submit`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          job_id, candidate_id, student_token: tokenRef.current,
+          answers: finalHistory.map(h => h.answer),
+          time_taken_seconds: Math.floor((Date.now() - interviewStart) / 1000),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Evaluation failed");
+      streamRef.current?.getTracks().forEach(t => t.stop());
+      setEvaluation(data.evaluation);
+      setPhase("results");
+    } catch (err: unknown) {
+      toast({ title: "Evaluation failed", description: err instanceof Error ? err.message : "Unknown error", variant: "destructive" });
+      streamRef.current?.getTracks().forEach(t => t.stop());
+      setLocation("/student/calls");
+    }
+  }, [stopListening, history, job_id, candidate_id, interviewStart, toast, setLocation]);
+
+  const handleReschedule = useCallback(() => {
+    setShowEndDialog(false);
+    stopListening();
+    synthRef.current?.cancel();
+    if (timerRef.current) clearInterval(timerRef.current);
+    streamRef.current?.getTracks().forEach(t => t.stop());
+    setLocation("/student/calls");
+  }, [stopListening, setLocation]);
+
   const toggleMic = useCallback(() => {
+    if (micBlocked) {
+      navigator.mediaDevices.getUserMedia({ audio: true })
+        .then(s => { s.getTracks().forEach(t => t.stop()); setMicBlocked(false); setMicOn(true); setTimeout(() => startListening(), 200); })
+        .catch(() => toast({ title: "Microphone still blocked", description: "Allow microphone in browser settings and refresh.", variant: "destructive" }));
+      return;
+    }
     if (micOn) { stopListening(); setMicOn(false); }
     else { setMicOn(true); if (phase === "interview" && !isSpeaking) setTimeout(() => startListening(), 100); }
-  }, [micOn, phase, isSpeaking, stopListening, startListening]);
+  }, [micBlocked, micOn, phase, isSpeaking, stopListening, startListening, toast]);
 
   const toggleCamera = useCallback(() => {
     if (!streamRef.current) return;
@@ -403,11 +475,12 @@ export default function MeetInterviewPage() {
   }, []);
 
   const endCall = useCallback(() => {
+    if (phase === "interview") { setShowEndDialog(true); return; }
     stopListening(); synthRef.current?.cancel();
     if (timerRef.current) clearInterval(timerRef.current);
     streamRef.current?.getTracks().forEach(t => t.stop());
     setLocation("/student/calls");
-  }, [stopListening, setLocation]);
+  }, [phase, stopListening, setLocation]);
 
   const formatTime = (s: number) => `${Math.floor(s / 60).toString().padStart(2, "0")}:${(s % 60).toString().padStart(2, "0")}`;
   const q = currentQuestion;
@@ -682,11 +755,12 @@ export default function MeetInterviewPage() {
             ))}
           </div>
 
-          <button onClick={toggleMic} className={cn(
-            "w-11 h-11 rounded-full flex items-center justify-center transition-all border",
+          <button onClick={toggleMic} title={micBlocked ? "Microphone blocked — click to retry" : micOn ? "Mute mic" : "Unmute mic"} className={cn(
+            "w-11 h-11 rounded-full flex items-center justify-center transition-all border relative",
+            micBlocked ? "bg-red-500 border-red-500 text-white hover:bg-red-600 animate-pulse" :
             micOn ? "bg-card border-border text-foreground hover:bg-muted" : "bg-red-500 border-red-500 text-white hover:bg-red-600"
           )}>
-            {micOn ? <Mic size={18} /> : <MicOff size={18} />}
+            {micOn && !micBlocked ? <Mic size={18} /> : <MicOff size={18} />}
           </button>
 
           <button onClick={toggleCamera} className={cn(
@@ -701,7 +775,12 @@ export default function MeetInterviewPage() {
           </button>
 
           <div className="ml-4 flex items-center gap-2 min-w-[80px]">
-            {isListening && (
+            {micBlocked && (
+              <span className="flex items-center gap-1.5 text-xs text-red-500">
+                <MicOff size={12} /> Mic blocked
+              </span>
+            )}
+            {!micBlocked && isListening && (
               <motion.span animate={{ opacity: [1, 0.4, 1] }} transition={{ duration: 1.2, repeat: Infinity }}
                 className="flex items-center gap-1.5 text-xs text-emerald-600">
                 <span className="w-2 h-2 rounded-full bg-emerald-500" /> Listening
@@ -714,6 +793,41 @@ export default function MeetInterviewPage() {
             )}
           </div>
         </div>
+
+        {/* End-call dialog */}
+        <AnimatePresence>
+          {showEndDialog && (
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm">
+              <motion.div initial={{ scale: 0.92, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.92, opacity: 0 }}
+                className="bg-card border border-border rounded-2xl shadow-2xl p-6 max-w-xs w-full mx-4 space-y-4">
+                <div className="text-center">
+                  <div className="w-12 h-12 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center mx-auto mb-3">
+                    <PhoneOff size={22} className="text-red-500" />
+                  </div>
+                  <h3 className="text-base font-bold text-foreground">End Interview?</h3>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    You've answered <span className="font-semibold text-foreground">{history.length}</span> of <span className="font-semibold text-foreground">{TOTAL_QUESTIONS}</span> questions.
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <button onClick={handleEndAndEvaluate}
+                    className="w-full h-10 rounded-xl bg-gradient-to-r from-[#667eea] to-[#764ba2] text-white text-sm font-semibold hover:opacity-90 transition-opacity">
+                    End & Evaluate Now
+                  </button>
+                  <button onClick={handleReschedule}
+                    className="w-full h-10 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-600 border border-amber-500/30 text-sm font-medium transition-colors">
+                    Reschedule for Later
+                  </button>
+                  <button onClick={() => setShowEndDialog(false)}
+                    className="w-full h-9 text-xs text-muted-foreground hover:text-foreground transition-colors">
+                    Cancel — Continue Interview
+                  </button>
+                </div>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
     );
   }
