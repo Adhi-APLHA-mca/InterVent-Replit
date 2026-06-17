@@ -3,13 +3,14 @@
   "version": "0.0.0",
   "license": "MIT",
   "scripts": {
-    "dev": "npm --prefix artifacts/intervent install --ignore-scripts && npm --prefix artifacts/intervent/frontend install --ignore-scripts && npm --prefix artifacts/intervent run dev",
+    "dev": "concurrently --names \"FRONTEND,BACKEND\" --prefix-colors \"cyan,magenta\" \"pnpm --prefix artifacts/intervent run dev\" \"cd artifacts/intervent/backend && uvicorn fastapi_app:app --host 0.0.0.0 --port 8000 --reload\"",
     "build": "pnpm run typecheck && pnpm -r --if-present run build",
     "typecheck:libs": "tsc --build",
     "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck"
   },
   "private": true,
   "devDependencies": {
+    "concurrently": "^10.0.3",
     "prettier": "^3.8.3",
     "typescript": "~5.9.3"
   },
