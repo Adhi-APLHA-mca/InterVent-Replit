@@ -34,7 +34,7 @@ from resume_agent.email_agent import run_email_agent
 from resume_agent.assessment_agent import generate_assessment_questions, evaluate_assessment
 from resume_agent.aptitude_agent import generate_aptitude_questions, evaluate_aptitude
 from resume_agent.dsa_agent import generate_dsa_problems, strip_hidden_test_cases, evaluate_dsa_submission
-from resume_agent.meet_agent import generate_meet_questions, evaluate_meet_interview
+from resume_agent.meet_agent import generate_meet_questions, evaluate_meet_interview, generate_next_question, get_brief_feedback
 
 load_dotenv()
 
@@ -799,8 +799,8 @@ class MeetSelectionEmailRequest(BaseModel):
 @app.post("/api/meet/generate")
 async def generate_meet_endpoint(req: MeetGenerateRequest):
     """
-    Agent 7 — Generate 10 voice interview questions (5 HR + 5 Technical).
-    Questions are saved to Firestore. Client uses Web Speech API to ask/record.
+    Agent 7 — Initialize the voice interview session.
+    Returns candidate context so the frontend can generate questions one at a time via /api/meet/next.
     """
     verify_student_token(req.student_token)
 
@@ -818,44 +818,123 @@ async def generate_meet_endpoint(req: MeetGenerateRequest):
     cand_data = cand_doc.to_dict()
 
     existing = cand_data.get("meet_interview", {})
-    if existing.get("status") == "completed":
-        return {
-            "success": True,
-            "questions": existing.get("questions", []),
-            "already_completed": True,
-        }
-    if existing.get("status") == "in_progress" and existing.get("questions"):
-        return {
-            "success": True,
-            "questions": existing["questions"],
-            "already_completed": False,
-        }
-
-    from datetime import datetime, timezone
     job_role = cand_data.get("job_role", job_data.get("job_title", "Software Engineer"))
     skills = cand_data.get("skills", [])
     experience = cand_data.get("experience", 0.0)
     job_description = job_data.get("job_description", "")
 
-    questions = generate_meet_questions(
+    candidate_context = {
+        "job_role": job_role,
+        "skills": skills,
+        "experience": experience,
+        "job_description": job_description,
+    }
+
+    if existing.get("status") == "completed":
+        return {
+            "success": True,
+            "already_completed": True,
+            "evaluation": existing.get("evaluation"),
+            "candidate_context": candidate_context,
+        }
+
+    from datetime import datetime, timezone
+    # Initialize or resume session
+    if existing.get("status") != "in_progress":
+        cand_ref.update({
+            "meet_interview": {
+                "status": "in_progress",
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "questions": [],
+                "answers": [],
+                "evaluation": None,
+                "time_taken_seconds": 0,
+            }
+        })
+
+    return {
+        "success": True,
+        "already_completed": False,
+        "candidate_context": candidate_context,
+    }
+
+
+class MeetNextRequest(BaseModel):
+    job_id: str
+    candidate_id: str
+    student_token: str
+    question_number: int  # 1-based (1–10)
+    conversation_history: list = []  # [{question, type, answer}]
+
+
+@app.post("/api/meet/next")
+async def next_meet_question(req: MeetNextRequest):
+    """
+    Agent 7 — Generate the next interview question, one at a time.
+    Also returns brief conversational feedback on the previous answer (if any).
+    Saves the generated question to Firestore so /api/meet/submit can evaluate it.
+    """
+    verify_student_token(req.student_token)
+
+    if req.question_number < 1 or req.question_number > 10:
+        raise HTTPException(status_code=400, detail="question_number must be 1–10.")
+
+    db_client = get_firestore_client()
+    job_ref = db_client.collection("jobs").document(req.job_id)
+    job_doc = job_ref.get()
+    if not job_doc.exists:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    job_data = job_doc.to_dict()
+
+    cand_ref = job_ref.collection("candidates").document(req.candidate_id)
+    cand_doc = cand_ref.get()
+    if not cand_doc.exists:
+        raise HTTPException(status_code=404, detail="Candidate not found.")
+    cand_data = cand_doc.to_dict()
+
+    job_role = cand_data.get("job_role", job_data.get("job_title", "Software Engineer"))
+    skills = cand_data.get("skills", [])
+    experience = cand_data.get("experience", 0.0)
+    job_description = job_data.get("job_description", "")
+
+    # Generate brief feedback on the PREVIOUS answer (if not first question)
+    feedback = None
+    if req.question_number > 1 and req.conversation_history:
+        prev = req.conversation_history[-1]
+        prev_q = prev.get("question", "")
+        prev_a = prev.get("answer", "")
+        if prev_a and prev_a != "[No answer provided]":
+            try:
+                feedback = get_brief_feedback(prev_q, prev_a)
+            except Exception:
+                feedback = None
+
+    # Generate the next question
+    question_data = generate_next_question(
         job_role=job_role,
         job_description=job_description,
         skills=skills,
-        experience=experience,
+        experience=float(experience),
+        question_number=req.question_number,
+        conversation_history=req.conversation_history,
     )
 
-    cand_ref.update({
-        "meet_interview": {
-            "status": "in_progress",
-            "started_at": datetime.now(timezone.utc).isoformat(),
-            "questions": questions,
-            "answers": [],
-            "evaluation": None,
-            "time_taken_seconds": 0,
-        }
-    })
+    # Append this question to Firestore so submit can read them
+    meet_data = cand_data.get("meet_interview", {})
+    existing_questions = meet_data.get("questions", [])
+    # Only append if we don't already have this question index
+    already_has = any(q.get("index") == req.question_number for q in existing_questions)
+    if not already_has:
+        existing_questions.append(question_data)
+        cand_ref.update({"meet_interview.questions": existing_questions})
 
-    return {"success": True, "questions": questions, "already_completed": False}
+    return {
+        "success": True,
+        "question": question_data["question"],
+        "type": question_data["type"],
+        "index": question_data["index"],
+        "feedback": feedback,
+    }
 
 
 @app.post("/api/meet/submit")

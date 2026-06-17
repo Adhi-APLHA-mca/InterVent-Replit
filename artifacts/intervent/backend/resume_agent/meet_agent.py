@@ -1,21 +1,16 @@
 """
 Agent 7 — Meet Agent (AI Voice Interview)
 
-Generates 10 personalized interview questions (5 HR + 5 Technical)
-and evaluates the candidate's spoken answers using Groq LLM (free).
-
-Technologies used:
-  - Groq LLM (llama-3.3-70b-versatile) — free tier, already in use
-  - No paid APIs needed
-  - Voice input/output handled by browser Web Speech API (free)
+Per-question conversational flow:
+  - generate_next_question(): generates one question at a time, context-aware
+  - get_brief_feedback(): one natural sentence acknowledging previous answer
+  - evaluate_meet_interview(): final evaluation after all Q&A
 """
 import os
 import json
 from dotenv import load_dotenv
 from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
-from pydantic import BaseModel, Field
-from typing import List
 
 load_dotenv()
 
@@ -24,49 +19,54 @@ def _build_llm(temperature: float = 0.7):
     model_name = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
     api_key = os.getenv("GROQ_API_KEY", "")
     if not api_key:
-        raise EnvironmentError("GROQ_API_KEY is not set. Please add it to your .env file.")
+        raise EnvironmentError("GROQ_API_KEY is not set.")
     return ChatGroq(model=model_name, api_key=api_key, temperature=temperature)
 
 
-QUESTION_GEN_PROMPT = ChatPromptTemplate.from_messages([
+NEXT_QUESTION_PROMPT = ChatPromptTemplate.from_messages([
     (
         "system",
-        """You are an expert HR and technical interviewer. Generate exactly 10 interview questions:
-- Questions 1-5: HR/Behavioural questions (communication, teamwork, goals, challenges, culture fit)
-- Questions 6-10: Technical questions specific to the candidate's job role and skills
+        """You are a professional AI interviewer conducting a real-time voice interview.
+
+Questions 1-5 must be HR/Behavioural (communication, teamwork, goals, challenges, motivation, culture fit).
+Questions 6-10 must be Technical (specific to the candidate's job role and skills).
 
 Rules:
-- Questions must be conversational and suitable for a spoken voice interview
-- Keep each question clear and concise (1-2 sentences max)
-- Technical questions must relate directly to the job role and listed skills
-- Do NOT number the questions in the text itself
+- Sound natural and conversational, suitable for spoken voice
+- Keep it to 1-2 sentences maximum
+- Do NOT number the question or add prefixes like "Question 4:"
+- Build naturally on the conversation flow if relevant
 
-Return ONLY valid JSON in this exact format (no markdown, no extra text):
-{{
-  "questions": [
-    {{"question": "...", "type": "hr", "index": 1}},
-    {{"question": "...", "type": "hr", "index": 2}},
-    {{"question": "...", "type": "hr", "index": 3}},
-    {{"question": "...", "type": "hr", "index": 4}},
-    {{"question": "...", "type": "hr", "index": 5}},
-    {{"question": "...", "type": "technical", "index": 6}},
-    {{"question": "...", "type": "technical", "index": 7}},
-    {{"question": "...", "type": "technical", "index": 8}},
-    {{"question": "...", "type": "technical", "index": 9}},
-    {{"question": "...", "type": "technical", "index": 10}}
-  ]
-}}""",
+Return ONLY valid JSON: {{"question": "...", "type": "hr" or "technical"}}""",
     ),
     (
         "human",
-        """Generate interview questions for:
+        """Candidate Info:
 Job Role: {job_role}
-Job Description: {job_description}
-Candidate Skills: {skills}
+Skills: {skills}
 Experience: {experience} years
+Job Description: {job_description}
 
-Generate 10 questions (5 HR + 5 Technical) tailored to this candidate.""",
+This is question {question_number} of 10.
+{history_block}
+Generate question {question_number} now.""",
     ),
+])
+
+
+FEEDBACK_PROMPT = ChatPromptTemplate.from_messages([
+    (
+        "system",
+        """You are a friendly, natural AI interviewer. React to the candidate's answer with ONE short conversational sentence — exactly like a real human interviewer would. 
+Be warm and professional. Do NOT score or evaluate.
+Examples of good responses:
+- "That's a really thoughtful example, thank you."
+- "I appreciate you sharing that perspective."
+- "Interesting approach — I've noted that."
+- "Good, that makes sense."
+Return ONLY that single sentence, no quotes, no extra text.""",
+    ),
+    ("human", "Question: {question}\nCandidate's answer: {answer}"),
 ])
 
 
@@ -75,13 +75,9 @@ EVALUATION_PROMPT = ChatPromptTemplate.from_messages([
         "system",
         """You are an expert interview evaluator. Evaluate a candidate's voice interview answers.
 
-For each answer:
-- Score from 0-10 based on: relevance, depth, clarity, confidence
-- Give brief constructive feedback
+For each answer, score 0-10 based on: relevance, depth, clarity, and confidence.
 
-Then provide an overall assessment.
-
-Return ONLY valid JSON (no markdown, no extra text):
+Return ONLY valid JSON (no markdown):
 {{
   "question_scores": [
     {{"index": 1, "score": 8, "feedback": "Good answer..."}},
@@ -93,10 +89,10 @@ Return ONLY valid JSON (no markdown, no extra text):
   "recommendation": "selected",
   "strengths": ["...", "..."],
   "improvements": ["...", "..."],
-  "summary": "Brief overall summary of the candidate's performance in 2-3 sentences."
+  "summary": "2-3 sentence overall summary of the candidate."
 }}
 
-recommendation must be exactly "selected" or "not_selected" based on overall_score >= 60.""",
+recommendation must be exactly "selected" or "not_selected" (selected if overall_score >= 60).""",
     ),
     (
         "human",
@@ -105,36 +101,43 @@ recommendation must be exactly "selected" or "not_selected" based on overall_sco
 Interview Q&A:
 {qa_pairs}
 
-Evaluate all 10 answers and return the structured assessment.""",
+Evaluate all answers and return the structured assessment.""",
     ),
 ])
 
 
-def generate_meet_questions(
+def generate_next_question(
     job_role: str,
     job_description: str,
     skills: list,
     experience: float,
-) -> list:
+    question_number: int,
+    conversation_history: list,
+) -> dict:
     """
-    Generate 10 interview questions (5 HR + 5 Technical) for the voice interview.
-
-    Returns list of dicts: [{question, type, index}, ...]
+    Generate the next interview question (1-indexed, 1-10).
+    conversation_history: list of {question, type, answer} dicts for previous Q&A.
+    Returns: {question: str, type: "hr"|"technical"}
     """
-    llm = _build_llm(temperature=0.7)
-    chain = QUESTION_GEN_PROMPT | llm
+    llm = _build_llm(temperature=0.75)
+    chain = NEXT_QUESTION_PROMPT | llm
 
-    skills_str = ", ".join(skills) if skills else "general programming"
+    history_lines = []
+    for item in conversation_history:
+        history_lines.append(f"Q: {item.get('question', '')}")
+        history_lines.append(f"A: {item.get('answer', '[No answer]')}")
+    history_block = ("Previous Q&A:\n" + "\n".join(history_lines)) if history_lines else ""
+
     result = chain.invoke({
         "job_role": job_role or "Software Engineer",
-        "job_description": job_description or "General software development role",
-        "skills": skills_str,
+        "job_description": job_description or "",
+        "skills": ", ".join(skills) if skills else "general programming",
         "experience": experience or 0,
+        "question_number": question_number,
+        "history_block": history_block,
     })
 
     raw = result.content.strip()
-
-    # Strip markdown code fences if present
     if raw.startswith("```"):
         raw = raw.split("```")[1]
         if raw.startswith("json"):
@@ -142,12 +145,27 @@ def generate_meet_questions(
     raw = raw.strip()
 
     parsed = json.loads(raw)
-    questions = parsed.get("questions", [])
+    q_type = parsed.get("type", "hr" if question_number <= 5 else "technical")
+    return {
+        "question": parsed.get("question", ""),
+        "type": q_type,
+        "index": question_number,
+    }
 
-    if len(questions) != 10:
-        raise ValueError(f"Expected 10 questions, got {len(questions)}")
 
-    return questions
+def get_brief_feedback(question: str, answer: str) -> str:
+    """
+    Generate one natural sentence of conversational feedback on the previous answer.
+    """
+    if not answer or answer.strip() in ("[No answer provided]", ""):
+        return "Alright, let's move on."
+    try:
+        llm = _build_llm(temperature=0.8)
+        chain = FEEDBACK_PROMPT | llm
+        result = chain.invoke({"question": question, "answer": answer})
+        return result.content.strip().strip('"').strip("'")
+    except Exception:
+        return "Thank you for that."
 
 
 def evaluate_meet_interview(
@@ -156,14 +174,7 @@ def evaluate_meet_interview(
     answers: list,
 ) -> dict:
     """
-    Evaluate all 10 interview answers using Groq LLM.
-
-    Args:
-        job_role: The position being interviewed for
-        questions: List of question dicts [{question, type, index}]
-        answers: List of answer strings (parallel to questions)
-
-    Returns evaluation dict with scores and recommendation.
+    Evaluate all interview answers using Groq LLM.
     """
     llm = _build_llm(temperature=0)
     chain = EVALUATION_PROMPT | llm
@@ -175,15 +186,12 @@ def evaluate_meet_interview(
         a_text = a.strip() if a else "[No answer provided]"
         qa_lines.append(f"Q{i} ({q_type}): {q_text}\nAnswer: {a_text}")
 
-    qa_pairs = "\n\n".join(qa_lines)
-
     result = chain.invoke({
         "job_role": job_role or "Software Engineer",
-        "qa_pairs": qa_pairs,
+        "qa_pairs": "\n\n".join(qa_lines),
     })
 
     raw = result.content.strip()
-
     if raw.startswith("```"):
         raw = raw.split("```")[1]
         if raw.startswith("json"):
@@ -191,13 +199,21 @@ def evaluate_meet_interview(
     raw = raw.strip()
 
     evaluation = json.loads(raw)
-
-    # Ensure recommendation is valid
     overall = evaluation.get("overall_score", 0)
     if "recommendation" not in evaluation:
         evaluation["recommendation"] = "selected" if overall >= 60 else "not_selected"
-
     evaluation["passed"] = evaluation["recommendation"] == "selected"
     evaluation["total_questions"] = len(questions)
-
     return evaluation
+
+
+# Keep for backwards compatibility
+def generate_meet_questions(job_role, job_description, skills, experience):
+    """Legacy: generates all 10 questions at once."""
+    questions = []
+    history = []
+    for i in range(1, 11):
+        q = generate_next_question(job_role, job_description, skills, experience, i, history)
+        questions.append(q)
+        history.append({"question": q["question"], "type": q["type"], "answer": ""})
+    return questions
