@@ -111,9 +111,11 @@ export default function MeetInterviewPage() {
   const listeningRef = useRef(false);
   const repeatFiredRef = useRef(false);
   const currentAnswerRef = useRef("");
+  const interimAnswerRef = useRef("");
   const currentQuestionRef = useRef<{ question: string; type: "hr" | "technical" } | null>(null);
 
   currentAnswerRef.current = currentAnswer;
+  interimAnswerRef.current = interimAnswer;
   currentQuestionRef.current = currentQuestion;
 
   useEffect(() => {
@@ -241,8 +243,8 @@ export default function MeetInterviewPage() {
         }, 300);
         return;
       }
-      if (finalText) { setCurrentAnswer(prev => (prev + " " + finalText).trim()); setInterimAnswer(""); }
-      else setInterimAnswer(interim);
+      if (finalText) { setCurrentAnswer(prev => (prev + " " + finalText).trim()); }
+      setInterimAnswer(interim);
     };
 
     rec.onend = () => {
@@ -314,7 +316,8 @@ export default function MeetInterviewPage() {
     if (isSpeaking || loadingNext) return;
     stopListening();
 
-    const ans = currentAnswerRef.current.trim() || "[No answer provided]";
+    const captured = (currentAnswerRef.current + " " + interimAnswerRef.current).trim();
+    const ans = captured || "[No answer provided]";
     const q = currentQuestionRef.current;
     if (!q) return;
 
