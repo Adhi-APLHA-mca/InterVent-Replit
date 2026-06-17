@@ -8,12 +8,15 @@ load_dotenv()
 
 
 def get_connection():
+    database_url = os.getenv("DATABASE_URL")
+    if database_url:
+        return psycopg2.connect(database_url)
     return psycopg2.connect(
-        host=os.getenv("POSTGRES_HOST", "localhost"),
-        port=int(os.getenv("POSTGRES_PORT", "5432")),
-        dbname=os.getenv("POSTGRES_DB", "intervent"),
-        user=os.getenv("POSTGRES_USER", "postgres"),
-        password=os.getenv("POSTGRES_PASSWORD", ""),
+        host=os.getenv("PGHOST", os.getenv("POSTGRES_HOST", "localhost")),
+        port=int(os.getenv("PGPORT", os.getenv("POSTGRES_PORT", "5432"))),
+        dbname=os.getenv("PGDATABASE", os.getenv("POSTGRES_DB", "intervent")),
+        user=os.getenv("PGUSER", os.getenv("POSTGRES_USER", "postgres")),
+        password=os.getenv("PGPASSWORD", os.getenv("POSTGRES_PASSWORD", "")),
     )
 
 
