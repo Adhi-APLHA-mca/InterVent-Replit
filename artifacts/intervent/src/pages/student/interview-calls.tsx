@@ -348,8 +348,38 @@ function CallCard({
                 </Button>
               )}
 
-              {/* ── Stage 1 Assessment section ── */}
-              {record.interview_preference && (
+              {/* ── Final result card (shown instead of all stage buttons once interview done) ── */}
+              {meetDone && (
+                <div className={cn(
+                  "rounded-xl border p-4 space-y-2",
+                  meetPassed
+                    ? "border-green-500/30 bg-green-500/5"
+                    : "border-amber-500/30 bg-amber-500/5"
+                )}>
+                  <div className="flex items-center gap-2">
+                    {meetPassed
+                      ? <Trophy size={15} className="text-green-500 shrink-0" />
+                      : <AlertCircle size={15} className="text-amber-500 shrink-0" />
+                    }
+                    <p className={cn(
+                      "text-xs font-semibold",
+                      meetPassed ? "text-green-700 dark:text-green-400" : "text-amber-700 dark:text-amber-400"
+                    )}>
+                      AI Interview {meetPassed ? "Passed ✓" : "Completed"} — {meet?.evaluation?.overall_score}% overall
+                    </p>
+                  </div>
+                  <div className="flex gap-3 pl-5">
+                    <span className="text-[11px] text-muted-foreground">HR: <span className="font-medium text-foreground">{meet?.evaluation?.hr_score}%</span></span>
+                    <span className="text-[11px] text-muted-foreground">Technical: <span className="font-medium text-foreground">{meet?.evaluation?.technical_score}%</span></span>
+                  </div>
+                  {meetPassed && (
+                    <p className="text-[11px] text-green-600/80 pl-5">Recommended for selection — HR will be in touch</p>
+                  )}
+                </div>
+              )}
+
+              {/* ── Stage progression (hidden once voice interview is completed) ── */}
+              {!meetDone && record.interview_preference && (
                 <>
                   {!assessment && (
                     <Button

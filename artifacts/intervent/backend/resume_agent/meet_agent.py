@@ -31,11 +31,16 @@ NEXT_QUESTION_PROMPT = ChatPromptTemplate.from_messages([
 Questions 1-5 must be HR/Behavioural (communication, teamwork, goals, challenges, motivation, culture fit).
 Questions 6-10 must be Technical (specific to the candidate's job role and skills).
 
+HR question ideas (pick different ones each time): self-introduction, career goals, teamwork experience, handling conflict, greatest achievement, motivation for this role, leadership example, handling failure, time management, work style.
+Technical question ideas: specific technologies from the candidate's skills, system design, debugging approach, code quality practices, performance optimization, project challenges, architecture decisions, testing strategies.
+
 Rules:
+- NEVER repeat or rephrase ANY question already asked in the Previous Q&A — check every prior Q before generating
+- Each question must be completely unique and explore a different topic than all previous questions
 - Sound natural and conversational, suitable for spoken voice
 - Keep it to 1-2 sentences maximum
 - Do NOT number the question or add prefixes like "Question 4:"
-- Build naturally on the conversation flow if relevant
+- Build naturally on the conversation flow if a prior answer mentioned something interesting
 
 Return ONLY valid JSON: {{"question": "...", "type": "hr" or "technical"}}""",
     ),
@@ -49,7 +54,8 @@ Job Description: {job_description}
 
 This is question {question_number} of 10.
 {history_block}
-Generate question {question_number} now.""",
+{already_asked_block}
+Generate a NEW, UNIQUE question {question_number} that has NOT been asked before.""",
     ),
 ])
 
@@ -123,10 +129,20 @@ def generate_next_question(
     chain = NEXT_QUESTION_PROMPT | llm
 
     history_lines = []
+    asked_questions = []
     for item in conversation_history:
-        history_lines.append(f"Q: {item.get('question', '')}")
-        history_lines.append(f"A: {item.get('answer', '[No answer]')}")
+        q = item.get('question', '')
+        a = item.get('answer', '[No answer]')
+        history_lines.append(f"Q: {q}")
+        history_lines.append(f"A: {a}")
+        if q:
+            asked_questions.append(q)
+
     history_block = ("Previous Q&A:\n" + "\n".join(history_lines)) if history_lines else ""
+    already_asked_block = (
+        "Questions already asked — DO NOT repeat or rephrase any of these:\n"
+        + "\n".join(f"- {q}" for q in asked_questions)
+    ) if asked_questions else ""
 
     result = chain.invoke({
         "job_role": job_role or "Software Engineer",
@@ -135,6 +151,7 @@ def generate_next_question(
         "experience": experience or 0,
         "question_number": question_number,
         "history_block": history_block,
+        "already_asked_block": already_asked_block,
     })
 
     raw = result.content.strip()
