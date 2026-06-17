@@ -12,24 +12,32 @@ def get_or_init_firebase():
 
     try:
         app = firebase_admin.get_app(app_name)
+        return app
     except ValueError:
-        import json
-        sa_json = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON")
-        if sa_json:
+        pass
+
+    import json
+    sa_json = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON", "").strip()
+    if sa_json:
+        try:
             sa_dict = json.loads(sa_json)
             cred = credentials.Certificate(sa_dict)
-        else:
-            service_account_path = os.getenv(
-                "FIREBASE_SERVICE_ACCOUNT",
-                "serviceAccountKey.json"
+        except json.JSONDecodeError as e:
+            raise RuntimeError(
+                f"FIREBASE_SERVICE_ACCOUNT_JSON is not valid JSON: {e}"
             )
-            cred = credentials.Certificate(service_account_path)
-
-        app = firebase_admin.initialize_app(
-            cred,
-            name=app_name,
+    else:
+        service_account_path = os.getenv(
+            "FIREBASE_SERVICE_ACCOUNT",
+            "serviceAccountKey.json"
         )
+        if not os.path.exists(service_account_path):
+            raise RuntimeError(
+                f"Firebase credentials not found. Set FIREBASE_SERVICE_ACCOUNT_JSON secret."
+            )
+        cred = credentials.Certificate(service_account_path)
 
+    app = firebase_admin.initialize_app(cred, name=app_name)
     return app
 
 

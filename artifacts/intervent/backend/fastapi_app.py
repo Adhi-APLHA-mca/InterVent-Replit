@@ -56,26 +56,43 @@ def init_firebase_default():
     """Initialize default Firebase app for token verification."""
     try:
         firebase_admin.get_app()
+        return  # already initialized
     except ValueError:
-        import json
-        sa_json = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON")
-        if sa_json:
+        pass
+
+    import json
+    sa_json = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON", "").strip()
+    if sa_json:
+        try:
             sa_dict = json.loads(sa_json)
             cred = credentials.Certificate(sa_dict)
-        else:
-            service_account_path = os.getenv(
-                "FIREBASE_SERVICE_ACCOUNT", "serviceAccountKey.json"
-            )
-            cred = credentials.Certificate(service_account_path)
-        database_url = os.getenv("FIREBASE_DATABASE_URL", "")
-        opts = {"databaseURL": database_url} if database_url else {}
-        firebase_admin.initialize_app(cred, opts)
+        except json.JSONDecodeError as e:
+            print(f"[InterVent] WARNING: FIREBASE_SERVICE_ACCOUNT_JSON is not valid JSON: {e}")
+            print("[InterVent] Firebase auth will be unavailable until a valid credential is provided.")
+            return
+    else:
+        service_account_path = os.getenv(
+            "FIREBASE_SERVICE_ACCOUNT", "serviceAccountKey.json"
+        )
+        if not os.path.exists(service_account_path):
+            print(f"[InterVent] WARNING: Firebase credentials not found at '{service_account_path}'.")
+            print("[InterVent] Set FIREBASE_SERVICE_ACCOUNT_JSON secret to enable Firebase auth.")
+            return
+        cred = credentials.Certificate(service_account_path)
+
+    database_url = os.getenv("FIREBASE_DATABASE_URL", "").strip()
+    opts = {"databaseURL": database_url} if database_url else {}
+    firebase_admin.initialize_app(cred, opts)
+    print("[InterVent] Firebase initialized successfully.")
 
 
 @app.on_event("startup")
 def on_startup():
     init_firebase_default()
-    create_candidates_table()
+    try:
+        create_candidates_table()
+    except Exception as e:
+        print(f"[InterVent] WARNING: Could not create candidates table: {e}")
     print("[InterVent] FastAPI resume processor started on port 8000")
 
 
