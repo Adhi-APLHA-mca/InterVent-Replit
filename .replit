@@ -32,7 +32,7 @@ task = "shell.exec"
 args = "echo 'Use artifacts/intervent workflow instead'"
 
 [agent]
-stack = "PNPM_WORKSPACE"
+stack = "BEST_EFFORT_FALLBACK"
 expertMode = true
 
 [postMerge]

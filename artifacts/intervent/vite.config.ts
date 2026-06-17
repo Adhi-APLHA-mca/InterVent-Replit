@@ -12,7 +12,7 @@ export default defineConfig({
     dedupe: ["react", "react-dom"],
   },
   server: {
-    port: parseInt(process.env.PORT ?? "3000"),
+    port: 5000,
     host: "0.0.0.0",
     allowedHosts: true,
   },
