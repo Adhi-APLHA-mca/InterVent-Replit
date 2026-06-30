@@ -401,6 +401,8 @@ async def student_apply(
             dl = datetime.fromisoformat(deadline)
             if dl.tzinfo is None:
                 dl = dl.replace(tzinfo=tz.utc)
+            # Give applicants the full deadline day — treat cutoff as 23:59:59 on that date
+            dl = dl.replace(hour=23, minute=59, second=59, microsecond=999999)
             if datetime.now(tz.utc) > dl:
                 raise HTTPException(status_code=400, detail="Application deadline has passed.")
         except HTTPException:
