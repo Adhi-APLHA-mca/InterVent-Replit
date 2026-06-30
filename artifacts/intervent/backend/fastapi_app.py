@@ -16,7 +16,7 @@ import uuid
 import shutil
 import threading
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 import pdfplumber
 from fastapi import FastAPI, File, Form, UploadFile, HTTPException
@@ -187,7 +187,7 @@ def health():
 
 @app.post("/api/resumes/upload")
 async def upload_resumes(
-    files: List[UploadFile] = File(default=[]),
+    files: Optional[List[UploadFile]] = File(default=None),
     job_title: str = Form(...),
     job_description: str = Form(default=""),
     hr_token: str = Form(...),
@@ -207,6 +207,8 @@ async def upload_resumes(
       6. Store full profile in PostgreSQL
       7. Store candidate + job metadata in Firestore (including resume_text)
     """
+    if files is None:
+        files = []
     if pooling_type == "private" and not files:
         raise HTTPException(status_code=400, detail="No files uploaded. Private jobs require at least one resume.")
     if len(files) > 10:

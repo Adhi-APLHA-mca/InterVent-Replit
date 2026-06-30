@@ -100,7 +100,12 @@ function ApplyModal({
       });
 
       const data = await res.json().catch(() => ({ detail: `Server error ${res.status}` }));
-      if (!res.ok) throw new Error(data.detail || `Error ${res.status}`);
+      if (!res.ok) {
+        const detail = Array.isArray(data.detail)
+          ? data.detail.map((e: { msg?: string }) => e.msg ?? JSON.stringify(e)).join(" · ")
+          : data.detail || `Error ${res.status}`;
+        throw new Error(detail);
+      }
 
       setResult({ name: data.name, message: data.message });
       setStage("done");

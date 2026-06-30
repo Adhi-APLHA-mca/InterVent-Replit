@@ -169,7 +169,12 @@ export default function InterviewScheduler() {
 
       if (!response.ok) {
         const err = await response.json().catch(() => ({ detail: "Unknown error" }));
-        throw new Error(err.detail || `Server error: ${response.status}`);
+        const detail = Array.isArray(err.detail)
+          ? err.detail.map((e: { msg?: string; loc?: string[] }) =>
+              e.msg ? `${e.loc?.slice(-1)[0] ?? "field"}: ${e.msg}` : JSON.stringify(e)
+            ).join(" · ")
+          : err.detail || `Server error: ${response.status}`;
+        throw new Error(detail);
       }
 
       const data = await response.json();
