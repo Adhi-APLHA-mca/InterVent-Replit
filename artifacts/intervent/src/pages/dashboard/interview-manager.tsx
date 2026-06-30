@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useLocation } from "wouter";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   collection, onSnapshot, query, where,
@@ -30,6 +31,8 @@ interface Job {
   screening_status: "pending" | "running" | "done";
   emails_sent: boolean;
   created_at: string;
+  pooling_type?: "open" | "private";
+  application_deadline?: string;
 }
 
 interface Candidate {
@@ -509,6 +512,7 @@ function MeetReportSection({ job, candidates }: { job: Job; candidates: Candidat
 
 function JobDetailView({ job, onBack }: { job: Job; onBack: () => void }) {
   const { toast } = useToast();
+  const [, setLocation] = useLocation();
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [isRerunning, setIsRerunning] = useState(false);
   const [isResending, setIsResending] = useState(false);
@@ -609,7 +613,20 @@ function JobDetailView({ job, onBack }: { job: Job; onBack: () => void }) {
             {job.hr_name} · {formatDate(job.created_at)} · {job.total_candidates} candidate(s)
           </p>
         </div>
-        <ScreeningStatusBadge status={job.screening_status} />
+        <div className="flex items-center gap-2 shrink-0">
+          {job.pooling_type === "open" && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setLocation(`/dashboard/leaderboard?job_id=${job.job_id}`)}
+              className="gap-1.5 text-yellow-600 border-yellow-500/40 hover:bg-yellow-500/10"
+            >
+              <Trophy size={13} />
+              Leaderboard
+            </Button>
+          )}
+          <ScreeningStatusBadge status={job.screening_status} />
+        </div>
       </div>
 
       {/* ── Stage 1: Screening Agent ─────────────────────────────────────── */}

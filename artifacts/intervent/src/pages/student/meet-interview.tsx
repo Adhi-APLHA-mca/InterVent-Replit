@@ -229,8 +229,13 @@ export default function MeetInterviewPage() {
         if (event.results[i].isFinal) finalText += t;
         else interim += t;
       }
-      const allText = (currentAnswerRef.current + " " + interim + " " + finalText).toLowerCase();
-      const hasRepeat = REPEAT_PHRASES.some(p => allText.includes(p));
+      // Only check the MOST RECENT speech chunk — checking the whole accumulated answer
+      // causes false positives (e.g. "repeatedly" matching "repeat" and wiping the answer).
+      const recentText = (interim + " " + finalText).toLowerCase().trim();
+      const hasRepeat = recentText.length > 0 && REPEAT_PHRASES.some(p => {
+        const escaped = p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        try { return new RegExp(`\\b${escaped}\\b`).test(recentText); } catch { return recentText.includes(p); }
+      });
       if (hasRepeat && !repeatFiredRef.current) {
         repeatFiredRef.current = true;
         setRepeatFired(true);

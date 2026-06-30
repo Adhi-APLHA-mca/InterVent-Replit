@@ -10,6 +10,7 @@ import DashboardLayout from "@/pages/dashboard/layout";
 import StudentLayout from "@/pages/student/layout";
 import InterviewScheduler from "@/pages/dashboard/interview-scheduler";
 import InterviewManager from "@/pages/dashboard/interview-manager";
+import LeaderboardPage from "@/pages/dashboard/leaderboard";
 import JobOpenings from "@/pages/student/job-openings";
 import InterviewCalls from "@/pages/student/interview-calls";
 import AssessmentPage from "@/pages/student/assessment";
@@ -40,6 +41,11 @@ function Router() {
       <Route path="/dashboard/manager">
         <DashboardLayout>
           <InterviewManager />
+        </DashboardLayout>
+      </Route>
+      <Route path="/dashboard/leaderboard">
+        <DashboardLayout>
+          <LeaderboardPage />
         </DashboardLayout>
       </Route>
 
