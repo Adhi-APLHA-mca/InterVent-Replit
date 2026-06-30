@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
-import { collection, onSnapshot } from "firebase/firestore";
-import { onAuthStateChanged } from "firebase/auth";
+import { collection, onSnapshot, getDocs, query, where, limit } from "firebase/firestore";
+import { onAuthStateChanged, type User as FirebaseUser } from "firebase/auth";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   BriefcaseBusiness, Users, Calendar, Building2, Search,
@@ -53,9 +53,11 @@ function isDeadlinePassed(deadline: string | undefined): boolean {
 function ApplyModal({
   job,
   onClose,
+  onApplied,
 }: {
   job: Job;
   onClose: () => void;
+  onApplied: (jobId: string) => void;
 }) {
   const { toast } = useToast();
   const [, setLocation] = useLocation();
@@ -112,6 +114,7 @@ function ApplyModal({
 
       setResult({ name: data.name, message: data.message });
       setStage("done");
+      onApplied(job.job_id);
     } catch (e: unknown) {
       setErrorMsg(e instanceof Error ? e.message : "Unexpected error");
       setStage("error");
@@ -254,10 +257,12 @@ function ApplyModal({
 function JobCard({
   job,
   index,
+  hasApplied,
   onApply,
 }: {
   job: Job;
   index: number;
+  hasApplied: boolean;
   onApply: (job: Job) => void;
 }) {
   const isOpen = job.pooling_type === "open";
@@ -286,11 +291,13 @@ function JobCard({
         </div>
         <span className={cn(
           "shrink-0 text-[11px] font-semibold uppercase tracking-wide px-2.5 py-1 rounded-full",
-          isHiring
-            ? "bg-green-500/10 text-green-600 dark:text-green-400"
-            : "bg-muted text-muted-foreground"
+          hasApplied
+            ? "bg-blue-500/10 text-blue-600 dark:text-blue-400"
+            : isHiring
+              ? "bg-green-500/10 text-green-600 dark:text-green-400"
+              : "bg-muted text-muted-foreground"
         )}>
-          {isHiring ? "Hiring" : deadlinePassed ? "Closed" : "Closed"}
+          {hasApplied ? "Applied" : isHiring ? "Hiring" : "Closed"}
         </span>
       </div>
 
@@ -323,7 +330,14 @@ function JobCard({
         )}
       </div>
 
-      {isHiring && (
+      {hasApplied && (
+        <div className="mt-3 flex items-center gap-2 text-xs font-medium text-blue-600 dark:text-blue-400 bg-blue-500/8 rounded-lg px-3 py-2">
+          <CheckCircle2 size={13} className="shrink-0" />
+          You have already applied for this position.
+        </div>
+      )}
+
+      {!hasApplied && isHiring && (
         <Button
           onClick={() => onApply(job)}
           className="w-full mt-3 bg-gradient-to-r from-[#667eea] to-[#764ba2] text-white hover:opacity-90 gap-2"
@@ -334,7 +348,7 @@ function JobCard({
         </Button>
       )}
 
-      {deadlinePassed && (
+      {!hasApplied && deadlinePassed && (
         <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground bg-muted/50 rounded-lg px-3 py-2">
           <AlertCircle size={13} className="shrink-0" />
           Applications for this position are closed.
@@ -349,11 +363,22 @@ export default function JobOpenings() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [applyingJob, setApplyingJob] = useState<Job | null>(null);
+  const [currentUser, setCurrentUser] = useState<FirebaseUser | null>(null);
+  const [appliedJobIds, setAppliedJobIds] = useState<Set<string>>(new Set());
   const [, setLocation] = useLocation();
 
+  // Auth listener — redirect if not logged in
   useEffect(() => {
-    const q = collection(db, "jobs");
-    const unsub = onSnapshot(q, (snap) => {
+    const unsub = onAuthStateChanged(auth, (user) => {
+      if (!user) { setLocation("/login"); return; }
+      setCurrentUser(user);
+    });
+    return () => unsub();
+  }, [setLocation]);
+
+  // Live jobs feed — open pooling only
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, "jobs"), (snap) => {
       const data = snap.docs
         .map((d) => ({ job_id: d.id, ...d.data() } as Job))
         .filter((j) => j.pooling_type === "open");
@@ -364,13 +389,35 @@ export default function JobOpenings() {
     return () => unsub();
   }, []);
 
-  // Redirect to login if not authenticated
+  // Check which jobs this student has already applied to
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (user) => {
-      if (!user) setLocation("/login");
+    if (!currentUser?.email || jobs.length === 0) return;
+    const email = currentUser.email.toLowerCase().trim();
+    Promise.all(
+      jobs.map(async (job) => {
+        try {
+          const snap = await getDocs(
+            query(
+              collection(db, "jobs", job.job_id, "candidates"),
+              where("email", "==", email),
+              limit(1)
+            )
+          );
+          return snap.empty ? null : job.job_id;
+        } catch {
+          return null;
+        }
+      })
+    ).then((results) => {
+      setAppliedJobIds(new Set(results.filter(Boolean) as string[]));
     });
-    return () => unsub();
-  }, [setLocation]);
+  }, [jobs, currentUser]);
+
+  // Called immediately after a successful application
+  const handleApplied = (jobId: string) => {
+    setAppliedJobIds((prev) => new Set([...prev, jobId]));
+    setApplyingJob(null);
+  };
 
   const filtered = jobs.filter((j) =>
     j.job_title?.toLowerCase().includes(search.toLowerCase()) ||
@@ -422,6 +469,7 @@ export default function JobOpenings() {
               key={job.job_id}
               job={job}
               index={i}
+              hasApplied={appliedJobIds.has(job.job_id)}
               onApply={(j) => setApplyingJob(j)}
             />
           ))}
@@ -433,6 +481,7 @@ export default function JobOpenings() {
           <ApplyModal
             job={applyingJob}
             onClose={() => setApplyingJob(null)}
+            onApplied={handleApplied}
           />
         )}
       </AnimatePresence>
