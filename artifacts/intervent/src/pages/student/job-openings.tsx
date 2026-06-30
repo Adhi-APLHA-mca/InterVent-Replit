@@ -41,7 +41,10 @@ function formatDate(ts: string | undefined) {
 function isDeadlinePassed(deadline: string | undefined): boolean {
   if (!deadline) return false;
   try {
-    return new Date(deadline) < new Date();
+    const deadlineDate = new Date(deadline);
+    // Give applicants the full deadline day — close at 23:59:59 that day
+    deadlineDate.setHours(23, 59, 59, 999);
+    return deadlineDate < new Date();
   } catch {
     return false;
   }
