@@ -114,6 +114,8 @@ def push_job_meta_to_firebase(
     job_title: str,
     job_description: str,
     total_candidates: int,
+    pooling_type: str = "private",
+    application_deadline: str = "",
 ):
     """
     Store job metadata in Firestore.
@@ -138,6 +140,8 @@ def push_job_meta_to_firebase(
             "total_shortlisted": 0,
             "total_rejected": 0,
             "emails_sent": False,
+            "pooling_type": pooling_type,
+            "application_deadline": application_deadline,
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
 

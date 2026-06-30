@@ -4,7 +4,10 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { motion } from "framer-motion";
-import { FileText, UploadCloud, X, ArrowRight, CheckCircle2, AlertCircle } from "lucide-react";
+import {
+  FileText, UploadCloud, X, ArrowRight, CheckCircle2, AlertCircle,
+  Lock, Globe,
+} from "lucide-react";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -45,6 +48,7 @@ interface UploadResult {
 export default function InterviewScheduler() {
   const { toast } = useToast();
   const [, navigate] = useLocation();
+  const [poolingType, setPoolingType] = useState<"private" | "open">("private");
   const [files, setFiles] = useState<File[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -121,10 +125,10 @@ export default function InterviewScheduler() {
   };
 
   const onSubmit = async (values: z.infer<typeof schedulerSchema>) => {
-    if (files.length === 0) {
+    if (poolingType === "private" && files.length === 0) {
       toast({
         title: "No resumes uploaded",
-        description: "Please upload at least one PDF resume before scheduling.",
+        description: "Private jobs require at least one PDF resume.",
         variant: "destructive",
       });
       return;
@@ -152,6 +156,10 @@ export default function InterviewScheduler() {
       formData.append("job_description", values.jobDescription || "");
       formData.append("hr_token", idToken);
       formData.append("hr_name", hrName);
+      formData.append("pooling_type", poolingType);
+      if (poolingType === "open" && values.deadline) {
+        formData.append("application_deadline", new Date(values.deadline).toISOString());
+      }
       files.forEach((file) => formData.append("files", file));
 
       const response = await fetch(`${FASTAPI_URL}/api/resumes/upload`, {
@@ -165,13 +173,19 @@ export default function InterviewScheduler() {
       }
 
       const data = await response.json();
-
       setUploadResults(data.candidates || []);
 
-      toast({
-        title: "Resumes processed successfully!",
-        description: `${data.total_processed} of ${data.total_uploaded} resume(s) parsed for "${values.jobTitle}".`,
-      });
+      if (poolingType === "open") {
+        toast({
+          title: "Open job posted!",
+          description: `"${values.jobTitle}" is now live. Students can apply directly from the Job Openings page.`,
+        });
+      } else {
+        toast({
+          title: "Resumes processed successfully!",
+          description: `${data.total_processed} of ${data.total_uploaded} resume(s) parsed for "${values.jobTitle}".`,
+        });
+      }
 
       if (data.total_errors > 0) {
         toast({
@@ -184,7 +198,6 @@ export default function InterviewScheduler() {
       form.reset();
       setFiles([]);
 
-      // Redirect to Interview Manager after a short delay so the toast is visible
       setTimeout(() => {
         navigate("/dashboard/manager");
       }, 1500);
@@ -219,7 +232,7 @@ export default function InterviewScheduler() {
           className="bg-gradient-to-r from-[#667eea] to-[#764ba2] text-white hover:opacity-90 shrink-0"
           data-testid="button-schedule-header"
         >
-          {isSubmitting ? "Processing Resumes..." : "Schedule Interview"}
+          {isSubmitting ? "Processing…" : poolingType === "open" ? "Post Job Opening" : "Schedule Interview"}
           {!isSubmitting && <ArrowRight size={16} className="ml-2" />}
         </Button>
       </div>
@@ -227,6 +240,77 @@ export default function InterviewScheduler() {
       <Form {...form}>
         <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
           <div className="grid grid-cols-1 gap-6">
+
+            {/* Card 0: Pooling Mode */}
+            <div className="bg-card border border-card-border p-6 rounded-2xl shadow-sm">
+              <h3 className="text-lg font-semibold mb-1">Job Visibility</h3>
+              <p className="text-sm text-muted-foreground mb-4">
+                Choose how candidates will be sourced for this position.
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={() => setPoolingType("private")}
+                  className={cn(
+                    "flex items-start gap-3 rounded-xl border-2 p-4 text-left transition-all",
+                    poolingType === "private"
+                      ? "border-primary bg-primary/5"
+                      : "border-border hover:border-primary/30"
+                  )}
+                >
+                  <div className={cn(
+                    "w-9 h-9 rounded-lg flex items-center justify-center shrink-0 mt-0.5",
+                    poolingType === "private" ? "bg-primary/15" : "bg-muted"
+                  )}>
+                    <Lock size={16} className={poolingType === "private" ? "text-primary" : "text-muted-foreground"} />
+                  </div>
+                  <div>
+                    <p className={cn("font-semibold text-sm", poolingType === "private" ? "text-primary" : "")}>
+                      Private Pooling
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      You upload resumes. Job is not visible to students.
+                    </p>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setPoolingType("open")}
+                  className={cn(
+                    "flex items-start gap-3 rounded-xl border-2 p-4 text-left transition-all",
+                    poolingType === "open"
+                      ? "border-primary bg-primary/5"
+                      : "border-border hover:border-primary/30"
+                  )}
+                >
+                  <div className={cn(
+                    "w-9 h-9 rounded-lg flex items-center justify-center shrink-0 mt-0.5",
+                    poolingType === "open" ? "bg-primary/15" : "bg-muted"
+                  )}>
+                    <Globe size={16} className={poolingType === "open" ? "text-primary" : "text-muted-foreground"} />
+                  </div>
+                  <div>
+                    <p className={cn("font-semibold text-sm", poolingType === "open" ? "text-primary" : "")}>
+                      Open Pooling
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      Students apply publicly by uploading their resume.
+                    </p>
+                  </div>
+                </button>
+              </div>
+
+              {poolingType === "open" && (
+                <div className="mt-4 rounded-xl bg-blue-500/5 border border-blue-500/20 p-3 text-sm text-blue-700 dark:text-blue-400 flex items-start gap-2">
+                  <Globe size={14} className="shrink-0 mt-0.5" />
+                  <span>
+                    This job will be publicly listed on the student Job Openings page. Students upload their own resume — AI screens each one automatically.
+                    Resume upload below is optional (you may still pre-seed with known candidates).
+                  </span>
+                </div>
+              )}
+            </div>
 
             {/* Card 1: Job Details */}
             <div className="bg-card border border-card-border p-6 rounded-2xl shadow-sm">
@@ -328,10 +412,15 @@ export default function InterviewScheduler() {
                   name="deadline"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Application Deadline</FormLabel>
+                      <FormLabel>
+                        {poolingType === "open" ? "Application Deadline *" : "Application Deadline"}
+                      </FormLabel>
                       <FormControl>
                         <Input type="date" {...field} data-testid="input-deadline" />
                       </FormControl>
+                      {poolingType === "open" && (
+                        <p className="text-xs text-muted-foreground">Students cannot apply after this date</p>
+                      )}
                       <FormMessage />
                     </FormItem>
                   )}
@@ -404,9 +493,13 @@ export default function InterviewScheduler() {
             {/* Card 3: Resume Upload */}
             <div className="bg-card border border-card-border p-6 rounded-2xl shadow-sm">
               <div className="mb-4">
-                <h3 className="text-lg font-semibold">Upload Candidate Resumes</h3>
+                <h3 className="text-lg font-semibold">
+                  {poolingType === "open" ? "Pre-seed Resumes (Optional)" : "Upload Candidate Resumes"}
+                </h3>
                 <p className="text-sm text-muted-foreground mt-1">
-                  Upload up to 10 PDF resumes — AI will automatically extract candidate profiles
+                  {poolingType === "open"
+                    ? "Optionally add known candidates now — students will also apply from the Job Openings page."
+                    : "Upload up to 10 PDF resumes — AI will automatically extract candidate profiles"}
                 </p>
               </div>
 
@@ -436,7 +529,9 @@ export default function InterviewScheduler() {
                 </div>
                 <p className="font-medium mb-1">Drag & drop PDF resumes here</p>
                 <p className="text-sm text-muted-foreground mb-2">or click to browse</p>
-                <p className="text-xs text-muted-foreground">Accepted: PDF only · Max 10 resumes · Each up to 10MB</p>
+                <p className="text-xs text-muted-foreground">
+                  Accepted: PDF only · Max {poolingType === "private" ? "10" : "10"} resumes · Each up to 10MB
+                </p>
               </div>
 
               {files.length > 0 && (
@@ -585,7 +680,11 @@ export default function InterviewScheduler() {
             className="w-full h-12 text-lg bg-gradient-to-r from-[#667eea] to-[#764ba2] text-white hover:opacity-90"
             data-testid="button-schedule-submit"
           >
-            {isSubmitting ? "Processing Resumes..." : "Schedule Interview & Process Resumes"}
+            {isSubmitting
+              ? "Processing…"
+              : poolingType === "open"
+                ? "Post Job Opening"
+                : "Schedule Interview & Process Resumes"}
             {!isSubmitting && <ArrowRight size={18} className="ml-2" />}
           </Button>
         </form>

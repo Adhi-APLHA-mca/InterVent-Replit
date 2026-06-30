@@ -24,7 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
 import firebase_admin
-from firebase_admin import credentials, auth as firebase_auth
+from firebase_admin import credentials, auth as firebase_auth, firestore as admin_firestore
 
 from resume_agent.agent import extract_candidate_profile
 from resume_agent.database import create_candidates_table, insert_candidate, get_candidates_by_job
@@ -187,11 +187,13 @@ def health():
 
 @app.post("/api/resumes/upload")
 async def upload_resumes(
-    files: List[UploadFile] = File(...),
+    files: List[UploadFile] = File(default=[]),
     job_title: str = Form(...),
     job_description: str = Form(default=""),
     hr_token: str = Form(...),
     hr_name: str = Form(...),
+    pooling_type: str = Form(default="private"),
+    application_deadline: str = Form(default=""),
 ):
     """
     Upload multiple PDF resumes for a job.
@@ -205,8 +207,8 @@ async def upload_resumes(
       6. Store full profile in PostgreSQL
       7. Store candidate + job metadata in Firestore (including resume_text)
     """
-    if not files:
-        raise HTTPException(status_code=400, detail="No files uploaded.")
+    if pooling_type == "private" and not files:
+        raise HTTPException(status_code=400, detail="No files uploaded. Private jobs require at least one resume.")
     if len(files) > 10:
         raise HTTPException(status_code=400, detail="Maximum 10 resumes per upload.")
 
@@ -306,6 +308,8 @@ async def upload_resumes(
         job_title=job_title,
         job_description=job_description,
         total_candidates=len(results),
+        pooling_type=pooling_type,
+        application_deadline=application_deadline,
     )
 
     # Auto-launch Agent 2 (screening) + Agent 3 (email) in the background.
@@ -333,6 +337,169 @@ def get_job_candidates(job_id: str):
     """Fetch all parsed candidates for a given job_id from PostgreSQL."""
     rows = get_candidates_by_job(job_id)
     return {"job_id": job_id, "total": len(rows), "candidates": rows}
+
+
+# ─── Student Self-Apply ────────────────────────────────────────────────────────
+
+def _screen_new_applicant(job_id: str) -> None:
+    """Background: run screening agent for a newly self-applied candidate."""
+    try:
+        run_screening_agent(job_id)
+    except Exception as e:
+        print(f"[APPLY] Screening failed for {job_id}: {e}")
+
+
+@app.post("/api/jobs/apply")
+async def student_apply(
+    job_id: str = Form(...),
+    student_token: str = Form(...),
+    file: UploadFile = File(...),
+):
+    """
+    Student self-applies to an open job by uploading their own resume.
+
+    Flow:
+      1. Verify student Firebase token → get email/uid
+      2. Check job is open pooling, not past deadline
+      3. Check student hasn't already applied (by email)
+      4. Save PDF, parse text, extract profile via Agent 1
+      5. Create candidate doc in Firestore
+      6. Launch screening agent in background
+    """
+    from datetime import datetime, timezone as tz
+
+    # Verify student token (any valid Firebase user)
+    try:
+        decoded = firebase_auth.verify_id_token(student_token)
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=f"Invalid token: {e}")
+
+    student_uid = decoded["uid"]
+    student_email = decoded.get("email", "")
+    student_name = decoded.get("name", decoded.get("display_name", student_email))
+
+    if not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF resumes are accepted.")
+
+    # Fetch job from Firestore
+    db_client = get_firestore_client()
+    job_ref = db_client.collection("jobs").document(job_id)
+    job_doc = job_ref.get()
+    if not job_doc.exists:
+        raise HTTPException(status_code=404, detail="Job not found.")
+
+    job_data = job_doc.to_dict()
+
+    if job_data.get("pooling_type") != "open":
+        raise HTTPException(status_code=403, detail="This job is not open for public applications.")
+
+    deadline = job_data.get("application_deadline", "")
+    if deadline:
+        try:
+            dl = datetime.fromisoformat(deadline)
+            if dl.tzinfo is None:
+                dl = dl.replace(tzinfo=tz.utc)
+            if datetime.now(tz.utc) > dl:
+                raise HTTPException(status_code=400, detail="Application deadline has passed.")
+        except HTTPException:
+            raise
+        except Exception:
+            pass  # malformed deadline — allow application
+
+    # Check duplicate application by email
+    if student_email:
+        existing_cands = job_ref.collection("candidates").where("email", "==", student_email.lower().strip()).limit(1).get()
+        if len(existing_cands) > 0:
+            raise HTTPException(status_code=409, detail="You have already applied for this job.")
+
+    # Save PDF
+    job_dir = UPLOAD_DIR / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    safe_filename = f"student_{student_uid[:8]}_{file.filename}"
+    pdf_path = job_dir / safe_filename
+
+    try:
+        with open(pdf_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Could not save resume: {e}")
+
+    resume_text = parse_pdf_text(pdf_path)
+    if not resume_text:
+        raise HTTPException(status_code=422, detail="Could not extract text from the PDF. Please ensure it is a text-based PDF.")
+
+    # Agent 1: extract profile
+    try:
+        profile = extract_candidate_profile(resume_text)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Profile extraction failed: {e}")
+
+    # Use student's auth email over parsed email (more reliable)
+    resolved_email = student_email or profile.get("email", "")
+    resolved_name = profile.get("full_name") or student_name or "Applicant"
+
+    candidate_id = f"cand_apply_{student_uid[:8]}_{uuid.uuid4().hex[:6]}"
+
+    hr_uid = job_data.get("hr_uid", "")
+    hr_name = job_data.get("hr_name", "")
+    job_title = job_data.get("job_title", "")
+    job_description = job_data.get("job_description", "")
+
+    # Store in PostgreSQL
+    pg_record = {
+        "candidate_id": candidate_id,
+        "job_id": job_id,
+        "hr_uid": hr_uid,
+        "hr_name": hr_name,
+        "full_name": resolved_name,
+        "email": resolved_email,
+        "phone": profile.get("phone", ""),
+        "skills": profile.get("skills", []),
+        "experience": profile.get("experience", 0.0),
+        "education": profile.get("education", ""),
+        "resume_text": resume_text,
+        "resume_path": str(pdf_path),
+        "job_role": profile.get("job_role", "") or job_title,
+        "status": "parsed",
+    }
+    insert_candidate(pg_record)
+
+    # Store in Firestore
+    push_candidate_to_firebase(
+        hr_uid=hr_uid,
+        hr_name=hr_name,
+        job_id=job_id,
+        candidate_id=candidate_id,
+        name=resolved_name,
+        email=resolved_email,
+        phone=profile.get("phone", ""),
+        resume_text=resume_text,
+        skills=profile.get("skills", []),
+        experience=profile.get("experience", 0.0),
+        education=profile.get("education", ""),
+        job_role=profile.get("job_role", "") or job_title,
+        status="Resume Uploaded",
+        interview_time="",
+    )
+
+    # Update total_candidates count on job doc
+    try:
+        job_ref.update({"total_candidates": admin_firestore.Increment(1)})
+    except Exception:
+        pass
+
+    # Launch screening in background
+    t = threading.Thread(target=_screen_new_applicant, args=(job_id,), daemon=True)
+    t.start()
+
+    return {
+        "success": True,
+        "candidate_id": candidate_id,
+        "job_id": job_id,
+        "name": resolved_name,
+        "email": resolved_email,
+        "message": "Application submitted! AI is screening your profile — check your dashboard in a moment.",
+    }
 
 
 # ─── Agent 2: Screening ────────────────────────────────────────────────────────
